@@ -1,0 +1,157 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Best Practice SQS FIFO Queue'
+
+Parameters:
+
+  pContentBasedDeduplication:
+    Description: specifies whether to enable content-based deduplication
+    Type: String
+    AllowedValues:
+      - 'true'
+      - 'false'
+    Default: 'true'
+
+  pQueueName:
+    Description: This stack will append fifo to the end of this name.
+    Type: String
+
+  pDelaySeconds:
+    Description: The Id of the AMI you wish to launch the instance from.
+    Type: Number
+    Default: '0'
+
+  pMaximumMessageSize:
+    Type: Number
+    Description: The limit of how many bytes that a message can contain before Amazon
+      SQS rejects it, 1024 bytes (1 KiB) to 262144 bytes (256 KiB)
+    Default: '262144'
+
+  pMessageRetentionPeriod:
+    Description: 'The number of seconds that Amazon SQS retains a message. You can
+      specify an integer value from 60 seconds (1 minute) to 1209600 seconds (14 days). '
+    Type: Number
+    Default: '345600'
+
+  pReceiveMessageWaitTimeSeconds:
+    Description: Specifies the duration, in seconds, that the ReceiveMessage action
+      call waits until a message is in the queue in order to include it in the response,
+      as opposed to returning an empty response if a message is not yet available.
+      1 to 20
+    Type: Number
+    Default: '0'
+
+  pUsedeadletterQueue:
+    Description: A dead-letter queue is a queue that other (source) queues can target
+      for messages that can't be processed (consumed) successfully. You can set aside
+      and isolate these messages in the dead-letter queue to determine why their processing
+      doesn't succeed.
+    Type: String
+    AllowedValues:
+      - 'true'
+      - 'false'
+    Default: 'true'
+
+  pVisibilityTimeout:
+    Description: This should be longer than the time it would take to process and
+      delete a message, this should not exceed 12 hours.
+    Type: Number
+    Default: '5'
+
+  pFifoQueue:
+    Description: Is the queue is FIFO Queue
+    Type: String
+    Default: 'true'
+    AllowedValues:
+      - 'true'
+      - 'false'    
+
+  pAlarmThresHold:
+    Type: Number
+    Default: 1000
+    Description: Rings the alarm when the queue depth of the Queue is 1000 or more.
+
+  pAlarmTopic:
+    Description: SNS Topic ARN To Publish the message
+    Type: String
+    Default: 'arn:aws:sns:us-west-2:138871512076:SQS-Alarm'    
+
+  pQueueDepthAlarm:
+    Description: 'Will Let Queue Depth Alarm Is Needed Or Not'
+    Type: String
+    AllowedValues:
+      - 'true'
+      - 'false'
+    Default: 'true'
+
+Conditions:
+
+  CreateDeadLetterQueue: !Not [!Equals [!Ref pUsedeadletterQueue, '']]
+  QueueDepthAlarm: !Not [!Equals [!Ref pQueueDepthAlarm, '']]    
+
+Resources:
+
+  SQSQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      ContentBasedDeduplication: !Ref pContentBasedDeduplication
+      FifoQueue: !Ref pFifoQueue
+      QueueName: 
+        Fn::Join: ['',[!Ref pQueueName,".fifo" ]]
+      MaximumMessageSize: !Ref pMaximumMessageSize
+      MessageRetentionPeriod: !Ref pMessageRetentionPeriod
+      ReceiveMessageWaitTimeSeconds: !Ref pReceiveMessageWaitTimeSeconds
+      RedrivePolicy:
+        Fn::If:
+          - CreateDeadLetterQueue
+          - deadLetterTargetArn:
+              Fn::GetAtt: [DeadLetterQueue, Arn]
+            maxReceiveCount: 5
+          - Ref: AWS::NoValue
+      VisibilityTimeout: !Ref pVisibilityTimeout
+
+  DeadLetterQueue:
+    Condition: CreateDeadLetterQueue
+    Type: AWS::SQS::Queue
+    Properties:
+      FifoQueue: 'true'
+      QueueName:
+        Fn::Join: ['', [!Ref pQueueName, "DeadLetter", ".fifo"]]
+
+  QueueDepthAlarm:
+    Condition: QueueDepthAlarm  
+    Type: AWS::CloudWatch::Alarm
+    Properties: 
+      AlarmDescription: "Alarm if queue depth increases to more than 10 messages"
+      Namespace: "AWS/SQS"
+      MetricName: "ApproximateNumberOfMessagesVisible"
+      Dimensions: 
+        - 
+          Name: "QueueName"
+          Value: 
+            Fn::GetAtt: [SQSQueue, QueueName ] 
+      Statistic: "Sum"
+      Period: "300"
+      EvaluationPeriods: "1"
+      Threshold: !Ref pAlarmThresHold
+      ComparisonOperator: "GreaterThanThreshold"
+      AlarmActions: [!Ref "pAlarmTopic"]
+      InsufficientDataActions: [!Ref "pAlarmTopic"]
+
+Outputs:
+
+  QueueURL:
+    Description: URL of newly created SQS Queue
+    Value:
+      Ref: SQSQueue
+
+  QueueARN: 
+    Description: "ARN of new AmazonSQS Queue"
+    Value: 
+      Fn::GetAtt: 
+        - "SQSQueue"
+        - "Arn"
+
+  QueueName:
+    Description: Name newly created SQS Queue
+    Value:
+      Fn::GetAtt: [SQSQueue, QueueName]
